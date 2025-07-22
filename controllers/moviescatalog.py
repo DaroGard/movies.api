@@ -1,7 +1,7 @@
 import json
 import logging
 from fastapi import HTTPException, Request
-from typing import Optional
+from typing import Optional, List
 
 from utils.database import execute_query_json
 from utils.redis_cache import get_redis_client, get_from_cache, store_in_cache
@@ -15,34 +15,34 @@ CACHE_TTL = 1800
 
 redis_client = get_redis_client()
 
-async def get_movies_catalog(category: Optional[str] = None):
-    """
-    Obtiene el catálogo de películas, con cache en Redis usando categoría.
-    """
+async def get_movies_catalog(category: Optional[str] = None) -> List[MovieCatalog]:
     if not redis_client:
         logger.warning("Redis no disponible, consulta directa a BD.")
 
     cache_key = MOVIES_CACHE_KEY
-    query = "SELECT movieId, title, genres FROM cinema.movies"
+    query = "SELECT TOP 50 movieId, title, genres FROM cinema.movies"
     params = ()
 
     if category:
         category_lower = category.lower()
         cache_key = f"movies:catalog:{category_lower}"
-        query += " WHERE LOWER(genres) LIKE ?"
+        query = "SELECT TOP 50 movieId, title, genres FROM cinema.movies WHERE LOWER(genres) LIKE ?"
         params = (f"%{category_lower}%",)
+
     cached_data = get_from_cache(redis_client, cache_key) if redis_client else None
     if cached_data is not None:
         logger.info(f"Cache hit para key: {cache_key}")
-        return cached_data
+        return [MovieCatalog(**item) for item in cached_data]
 
     try:
         result_json = await execute_query_json(query, params)
         data = json.loads(result_json)
+
         if redis_client:
             store_in_cache(redis_client, cache_key, data, CACHE_TTL)
 
-        return data
+        return [MovieCatalog(**item) for item in data]
+
     except Exception as e:
         logger.error(f"Error al obtener catálogo: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error al obtener catálogo: {str(e)}")
@@ -50,9 +50,6 @@ async def get_movies_catalog(category: Optional[str] = None):
 
 @validateadmin
 async def add_movie(request: Request, movie: MovieCatalog):
-    """
-    Inserta una nueva película y elimina la cache asociada.
-    """
     redis_client = get_redis_client()
     if redis_client is None:
         logger.warning("Redis no disponible, continuará sin caché.")

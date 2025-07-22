@@ -1,9 +1,10 @@
 import uvicorn
 import logging
-from fastapi import FastAPI, Depends, Header, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request
 from dotenv import load_dotenv
 from typing import Optional
 from contextlib import asynccontextmanager
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from controllers.firebase import register_user_firebase, login_user_firebase
 from controllers.moviescatalog import get_movies_catalog, add_movie
@@ -40,11 +41,14 @@ try:
 except Exception as e:
     logger.error(f"Telemetry initialization failed: {e}")
 
-async def get_current_user(authorization: str = Header(...)):
-    if not authorization.startswith("Bearer "):
+security = HTTPBearer()
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
+    user = decode_jwt_token(token)
+    if not user:
         raise HTTPException(status_code=401, detail="Token inválido")
-    token = authorization[7:]
-    return decode_jwt_token(token)
+    return user
 
 @app.post("/signup")
 async def signup(user: UserRegister):
@@ -59,7 +63,11 @@ async def catalog(category: Optional[str] = None, current_user: dict = Depends(g
     return await get_movies_catalog(category)
 
 @app.post("/catalog")
-async def create_movie(movie: MovieCatalog, request: Request):
+async def create_movie(
+    movie: MovieCatalog,
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
     return await add_movie(movie=movie, request=request)
 
 @app.get("/health")
